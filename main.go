@@ -25,11 +25,14 @@ var (
 	BlockChainHost             = "http://127.0.0.1:8545"
 	RedisSynchronizedBlockFlag = "bc:synchronizedBlockNumber"
 
-	DBDriverName = "postgres"
+	DBDriverName = "postgres" //mysql
 	DBURL        = "host= port= user= password= dbname= sslmode=disable"
+	RedisHost    = ""
+	RedisPasswd  = ""
 
 	tokenMap    map[string]string
 	pgsqlEngine *xorm.Engine
+	redisClient *redis.RedisClient
 )
 
 func init() {
@@ -85,6 +88,12 @@ func buildDBConnect() error {
 	}
 	pgsqlEngine = pgEngine
 	fmt.Println("build db connect successful")
+
+	rc, err := redis.NewClient(RedisHost, RedisPasswd)
+	if err != nil {
+		return err
+	}
+	redisClient = rc
 	return nil
 }
 
@@ -94,6 +103,10 @@ func closeDBConnect() {
 	if pgsqlEngine != nil {
 		pgsqlEngine.Close()
 		pgsqlEngine = nil
+	}
+	if redisClient != nil {
+		redisClient.Close()
+		redisClient = nil
 	}
 }
 
@@ -109,16 +122,10 @@ func SyncData(pgEngine *xorm.Engine) {
 		return
 	}
 
-	rc, err := redis.NewClient()
-	if err != nil {
-		return
-	}
-	defer rc.Close()
-
 	for index := procBlockNumber; index < bcBlockNumber-15; index++ {
 		if SyncBlock(pgEngine, index) {
 			//redis.Set("bc:synchronizedBlockNumber", strconv.FormatInt(9750, 10))
-			if rc.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(index, 10), 0).Err() != nil {
+			if redisClient.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(index, 10), 0) != nil {
 				break
 			}
 			log.Printf("Sync block: success %d/%d .............", index, bcBlockNumber)
@@ -226,7 +233,7 @@ func getBcBlockNumber() int64 {
 
 func getProcBlockNumber() (int64, error) {
 
-	dbBlockNumber, err := redis.Get(RedisSynchronizedBlockFlag)
+	dbBlockNumber, err := redisClient.Get(RedisSynchronizedBlockFlag)
 	if err != nil {
 		log.Printf("Get synchronizedBlockNumber error1, %s", err)
 		return 0, err
@@ -234,7 +241,7 @@ func getProcBlockNumber() (int64, error) {
 
 	var procBlockNumber int64
 	if tool.IsEmpty(dbBlockNumber) {
-		redis.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(DefaultStartSyncBlockNumber, 10), 0)
+		redisClient.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(DefaultStartSyncBlockNumber, 10), 0)
 		procBlockNumber = DefaultStartSyncBlockNumber
 	} else {
 		synchronizedBlockNumber := tool.AToInt64WithoutErr(dbBlockNumber)

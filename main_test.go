@@ -41,7 +41,7 @@ func Test_Sync(t *testing.T) {
 		return
 	}
 
-	for index := 5790795 + 1; index < int(getBcBlockNumber())-15; index++ {
+	for index := 5793514 + 1; index < int(getBcBlockNumber())-15; index++ {
 		SyncBlock(pgEngine, int64(index))
 
 	}
