@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 	"testing"
 
 	"github.com/go-xorm/xorm"
@@ -12,22 +11,20 @@ import (
 )
 
 func Test_Parse(t *testing.T) {
-	hash := "0x7b5bf6346af3b77eb84484f06ef1035ff8206971b5aaaa259738efc7e97425de"
-	tops := chain.GetTopics("", hash)
-	if len(tops) == 4 && tops[0] == "0xa9059cbb00000000000000000000000000000000000000000000000000000000" {
-		fmt.Println("tx: " + tops[1] + "," + tops[2] + "," + tops[3])
-		from := strings.Replace(tops[1], "0x000000000000000000000000", "0x", 1)
-		to := strings.Replace(tops[2], "0x000000000000000000000000", "0x", 1)
-		value := tool.HexToIntStr(tops[3])
-		//val := "6316120034000000006700"
-		value2 := tool.ToBalance(value, 18)
-		value3 := tool.ToValue(value2, 18)
-		fmt.Println("tx: " + from + ", " + to + ", " + value + ", " + value2 + ", " + value3)
+	hash := "0x51beaf8fd1fcdcd50dfab37d405454acfafd4e477d5105a1217af5eac2b4c604"
+	reply, _ := chain.GetTransactionReceipt(BlockChainHost, hash)
+	fmt.Println(reply)
+	tops := chain.ParseERC20Tx(BlockChainHost, hash)
+	if len(tops) == 4 {
+		fmt.Println("tx: " + tops[0] + "," + tops[1] + "," + tops[2] + "," + tool.ToBalance(tops[3], 18))
 	}
-	//fmt.Println(tops)
+
+	block, _ := chain.GetBlock(BlockChainHost, tool.IntToHex(5943396), true)
+	fmt.Println(block)
 }
 
 func Test_Sync(t *testing.T) {
+	fmt.Printf("Test_Sync")
 	//buildDBConnect()
 	pgEngine, err := xorm.NewEngine(DBDriverName, DBURL)
 	if err != nil {
@@ -41,8 +38,8 @@ func Test_Sync(t *testing.T) {
 		return
 	}
 
-	for index := 5793514 + 1; index < int(getBcBlockNumber())-15; index++ {
+	for index := 5942666 + 1; index < int(getBcBlockNumber())-15; index++ {
 		SyncBlock(pgEngine, int64(index))
-
 	}
+
 }

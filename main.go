@@ -15,15 +15,16 @@ import (
 	_ "github.com/lib/pq"
 
 	"fmt"
-	"strings"
 )
 
 var (
 	syncedTxCount, totalTxCount int64
-	DefaultStartSyncBlockNumber int64 = 5738916
+	DefaultStartSyncBlockNumber int64 = 5942666
 
 	BlockChainHost             = "http://127.0.0.1:8545"
 	RedisSynchronizedBlockFlag = "bc:synchronizedBlockNumber"
+
+	IsSaveToDB = true
 
 	DBDriverName = "postgres" //mysql
 	DBURL        = "host= port= user= password= dbname= sslmode=disable"
@@ -38,6 +39,8 @@ var (
 func init() {
 	tokenMap = make(map[string]string)
 	tokenMap["0x4cd988afbad37289baaf53c13e98e2bd46aaea8c"] = "KEY"
+	tokenMap["0xb9bb08ab7e9fa0a1356bd4a39ec0ca267e03b0b3"] = "PAI"
+	tokenMap["0x0f1ed66c251bcb52ecf7e67ac64bb72482048adb"] = "SER"
 }
 
 func main() {
@@ -55,8 +58,10 @@ func Try(fun func(), handler func(interface{})) {
 }
 func Run() error {
 	log.Println("Method: sync job run....")
-	//redis.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(5468416, 10), 0)
 	buildDBConnect()
+
+	//redisClient.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(DefaultStartSyncBlockNumber, 10))
+
 	for true {
 		fmt.Printf("---------------------------start exec sync job: %s---------------------------\n", time.Now().Format("2006-01-02 15:04:05"))
 		Try(func() {
@@ -89,11 +94,7 @@ func buildDBConnect() error {
 	pgsqlEngine = pgEngine
 	fmt.Println("build db connect successful")
 
-	rc, err := redis.NewClient(RedisHost, RedisPasswd)
-	if err != nil {
-		return err
-	}
-	redisClient = rc
+	redisClient = redis.NewClient(RedisHost, RedisPasswd, 0)
 	return nil
 }
 
@@ -125,7 +126,8 @@ func SyncData(pgEngine *xorm.Engine) {
 	for index := procBlockNumber; index < bcBlockNumber-15; index++ {
 		if SyncBlock(pgEngine, index) {
 			//redis.Set("bc:synchronizedBlockNumber", strconv.FormatInt(9750, 10))
-			if redisClient.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(index, 10), 0) != nil {
+			_, err := redisClient.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(index, 10))
+			if err != nil {
 				break
 			}
 			log.Printf("Sync block: success %d/%d .............", index, bcBlockNumber)
@@ -168,19 +170,37 @@ func SyncBlock(engine *xorm.Engine, blockNumber int64) bool {
 			return true
 		}
 		totalTxCount = totalTxCount + int64(len(txArray))
+		if IsSaveToDB {
+			cnt, err := engine.Insert(txArray)
 
-		count, err := engine.Insert(txArray)
+			syncedTxCount = syncedTxCount + cnt
+			log.Printf("SaveTx: %d, %s", len(txArray), err)
 
-		syncedTxCount = syncedTxCount + count
-
-		log.Printf("SaveTx: %d, %s", len(txArray), err)
-
-		return err == nil && count == int64(len(txArray))
+			return err == nil && cnt == int64(len(txArray))
+		}
 	}
 	return true
 }
 
 func ParseTx(txData map[string]interface{}, blocktime time.Time) *BTx {
+	//log.Printf("GetBcTx: %s", txData)
+	hash := txData["hash"].(string)
+	tx := chain.ParseERC20Tx(BlockChainHost, hash)
+	if len(tx) == 4 {
+		asset := tokenMap[tx[0]]
+		if asset == "" {
+			return nil
+		}
+		value := tool.ToBalance(tx[3], 18)
+		blockNum := tool.HexToIntWithoutError(txData["blockNumber"].(string))
+		fmt.Println("tx: ", asset, tx[1], tx[2], value, blockNum, hash)
+		return &BTx{Asset: asset, Fromaddr: tx[1], Toaddr: tx[2], Value: value, Status: 20, Blocknum: blockNum, Txhash: hash, Blocktime: blocktime, Createtime: time.Now()}
+	}
+	//fmt.Println("ParseERC20Tx fail")
+	return nil
+}
+
+func ParseTx2(txData map[string]interface{}, blocktime time.Time) *BTx {
 	//log.Printf("GetBcTx: %s", txData)
 	if txData["to"] == nil {
 		return nil
@@ -191,30 +211,15 @@ func ParseTx(txData map[string]interface{}, blocktime time.Time) *BTx {
 		//log.Printf("GetBcTx: %s", tool.ToJson(txData))
 		hash := txData["hash"].(string)
 		blockNum := tool.HexToIntWithoutError(txData["blockNumber"].(string))
-		from, to, value, err := parseKeyTxFromLog(hash)
-		if err == nil {
-			fmt.Println("tx: ", asset, from, to, value, blockNum, hash)
-			return &BTx{Asset: asset, Fromaddr: from, Toaddr: to, Value: value, Status: 20, Blocknum: blockNum, Txhash: hash, Blocktime: blocktime, Createtime: time.Now()}
-		} else {
-			fmt.Println("parseKeyTxFromLog:", err)
+		tx := chain.ParseERC20Tx(BlockChainHost, hash)
+		if len(tx) == 4 {
+			value := tool.ToBalance(tx[3], 18)
+			fmt.Println("tx: ", asset, tx[1], tx[2], value, blockNum, hash)
+			return &BTx{Asset: asset, Fromaddr: tx[1], Toaddr: tx[2], Value: value, Status: 20, Blocknum: blockNum, Txhash: hash, Blocktime: blocktime, Createtime: time.Now()}
 		}
+		fmt.Println("ParseERC20Tx fail")
 	}
 	return nil
-}
-
-func parseKeyTxFromLog(hash string) (string, string, string, error) {
-	topics := chain.GetTopics(BlockChainHost, hash)
-	//fmt.Println("top:",topics)
-	if len(topics) == 4 && topics[0] == "0xa9059cbb00000000000000000000000000000000000000000000000000000000" {
-		//fmt.Println("tx: "+topics[1]+","+topics[2]+","+topics[3])
-		from := strings.Replace(topics[1], "0x000000000000000000000000", "0x", 1)
-		to := strings.Replace(topics[2], "0x000000000000000000000000", "0x", 1)
-		value := tool.HexToIntStr(topics[3])
-		value2 := tool.ToBalance(value, 18)
-		//fmt.Println("tx: " +hash+", "+from+", "+to+", "+value2)
-		return from, to, value2, nil
-	}
-	return "", "", "", fmt.Errorf("parse log data error, tx: %s, %s", hash, topics)
 }
 
 func getBcBlockNumber() int64 {
@@ -241,7 +246,7 @@ func getProcBlockNumber() (int64, error) {
 
 	var procBlockNumber int64
 	if tool.IsEmpty(dbBlockNumber) {
-		redisClient.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(DefaultStartSyncBlockNumber, 10), 0)
+		redisClient.Set(RedisSynchronizedBlockFlag, strconv.FormatInt(DefaultStartSyncBlockNumber, 10))
 		procBlockNumber = DefaultStartSyncBlockNumber
 	} else {
 		synchronizedBlockNumber := tool.AToInt64WithoutErr(dbBlockNumber)
